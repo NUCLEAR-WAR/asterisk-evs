@@ -51,7 +51,7 @@
  	} else if (!strcmp(name, "opus")) {
 --- main/rtp_engine.c	(Asterisk 13.13.1)
 +++ main/rtp_engine.c	(working copy)
-@@ -2307,2 +2307,4 @@
+@@ -3720,2 +3720,4 @@
  	add_static_payload(107, ast_format_opus, 0);
 +
 +	ast_rtp_engine_load_format(ast_format_evs);
