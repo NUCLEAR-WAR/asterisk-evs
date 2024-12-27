@@ -51,6 +51,12 @@
  	} else if (!strcmp(name, "opus")) {
 --- main/rtp_engine.c	(Asterisk 13.13.1)
 +++ main/rtp_engine.c	(working copy)
+@@ -2202,2 +2202,5 @@
+
++ 
++	set_next_mime_type(ast_format_evs, 0, "audio", "EVS", 16000);
++
+ /* Define the static rtp payload mappings */
 @@ -3720,2 +3720,4 @@
  	add_static_payload(107, ast_format_opus, 0);
 +
