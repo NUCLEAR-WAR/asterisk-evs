@@ -49,16 +49,21 @@
 +	} else if (!strcmp(name, "evs")) {
 +		ao2_replace(ast_format_evs, format);
  	} else if (!strcmp(name, "opus")) {
---- main/rtp_engine.c	(Asterisk 13.13.1)
-+++ main/rtp_engine.c	(working copy)
-@@ -2202,2 +2202,5 @@
-
-+ 
-+	set_next_mime_type(ast_format_evs, 0, "audio", "EVS", 16000);
-+
- /* Define the static rtp payload mappings */
-@@ -3720,2 +3720,4 @@
+--- main/rtp_engine.c	2024-12-28 02:22:04.888730659 +0000
++++ main/rtp_engine.c	2024-12-28 02:24:39.553838441 +0000
+@@ -3905,6 +3905,7 @@
+ 	set_next_mime_type(ast_format_opus, 0,  "audio", "opus", 48000);
+ 	set_next_mime_type(ast_format_vp8, 0,  "video", "VP8", 90000);
+ 	set_next_mime_type(ast_format_vp9, 0, "video", "VP9", 90000);
++  set_next_mime_type(ast_format_evs, 0, "audio", "EVS", 16000);
+ 
+ 	/* Define the static rtp payload mappings */
+ 	add_static_payload(0, ast_format_ulaw, 0);
+@@ -3945,6 +3946,7 @@
+ 	add_static_payload(105, ast_format_t140_red, 0);   /* Real time text chat (with redundancy encoding) */
+ 	add_static_payload(106, ast_format_t140, 0);     /* Real time text chat */
  	add_static_payload(107, ast_format_opus, 0);
-+
-+	ast_rtp_engine_load_format(ast_format_evs);
++  ast_rtp_engine_load_format(ast_format_evs);
+ 	add_static_payload(108, ast_format_vp9, 0);
+ 	add_static_payload(109, ast_format_h265, 0);
  

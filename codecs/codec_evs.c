@@ -822,7 +822,7 @@ static int load_module(void)
 	res |= ast_register_translator(&lin32toevs);
 	res |= ast_register_translator(&evstolin48);
 	res |= ast_register_translator(&lin48toevs);
-
+  res |= ast_rtp_engine_load_format(ast_format_evs);
 	if (res) {
 		unload_module();
 		return AST_MODULE_LOAD_DECLINE;
