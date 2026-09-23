@@ -12,6 +12,7 @@
 #include "asterisk/linkedlists.h"       /* for AST_LIST_NEXT, etc */
 #include "asterisk/logger.h"            /* for ast_log, ast_debug, etc */
 #include "asterisk/module.h"
+#include "asterisk/rtp_engine.h"       /* for ast_rtp_engine_load_format */
 #include "asterisk/translate.h"         /* for ast_trans_pvt, etc */
 
 #include "asterisk/evs.h"               /* for evs_attr */
