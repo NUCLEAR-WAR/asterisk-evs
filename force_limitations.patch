@@ -1,13 +1,18 @@
---- res/res_format_attr_evs.c	(3GPP EVS for Asterisk 1.0)
-+++ res/res_format_attr_evs.c	(working copy)
-@@ -21 +21 @@ static struct evs_attr default_evs_attr
--	.hf_only                = -1, /* all formats                      */
-+	.hf_only                =  1, /* only Header Full format          */
-@@ -24,2 +24,2 @@ static struct evs_attr default_evs_attr
+--- res/res_format_attr_evs.c
++++ res/res_format_attr_evs.c
+@@ -23,6 +23,6 @@ static struct evs_attr default_evs_attr = {
+ 	.dtx                    =  2, /* on                               */
+ 	.dtx_send               =  1, /* do no change                     */
 -	.dtx_recv               =  2, /* on                               */
 -	.max_red                = -1, /* no redundancy limit              */
-+	.dtx_recv               =  0, /* off                              */
++	.dtx_recv               =  0, /* do not request receive DTX       */
 +	.max_red                =  0, /* no redundancy                    */
-@@ -37 +37 @@ static struct evs_attr default_evs_attr
+ 	.cmr                    =  0, /* might be in payload              */
+ 	.cmr_included           =  0, /* CMR not in SDP                   */
+@@ -35,5 +35,5 @@ static struct evs_attr default_evs_attr = {
+ 	.ch_recv                =  0, /* mono                             */
+ 	.ch_aw_send             =  7, /* MAX_RF_FEC_OFFSET; do not change */
 -	.ch_aw_recv             =  0, /* not at start                     */
-+	.ch_aw_recv             = -1, /* off; not linked to RTCP          */
++	.ch_aw_recv             = -1, /* no channel-aware reception       */
+ 	.mode_set               =  0, /* all modes                        */
+ 	.mode_change_period     =  0, /* not specified                    */
