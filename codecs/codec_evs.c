@@ -495,8 +495,7 @@ static int evstolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	        &payload, &count, &cmr) ||
 	    pvt->samples > BUFFER_SAMPLES / 2 ||
 	    count * n_samples > (BUFFER_SAMPLES / 2) - pvt->samples) {
-        ast_log(LOG_WARNING, "Invalid or oversized EVS Header-Full packet
-");
+        ast_log(LOG_WARNING, "Invalid or oversized EVS Header-Full packet\n");
         return -1;
     }
     if (attr && cmr >= 0 && cmr != 0x7f) {
