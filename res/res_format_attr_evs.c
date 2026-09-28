@@ -18,7 +18,7 @@
 /* Asterisk internal defaults; can differ from RFC defaults */
 static struct evs_attr default_evs_attr = {
 	.evs_mode_switch        = -1, /* primary mode                     */
-	.hf_only                = -1, /* all formats                      */
+	.hf_only                =  1, /* decoder accepts Header-Full only */
 	.dtx                    =  2, /* on                               */
 	.dtx_send               =  1, /* do no change                     */
 	.dtx_recv               =  2, /* on                               */

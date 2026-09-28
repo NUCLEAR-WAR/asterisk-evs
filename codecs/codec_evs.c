@@ -25,9 +25,10 @@
 #include <3gpp-evs/mime.h>              /* for AMRWB_IOmode2rate, etc */
 /* mime.h must come last because typedef.h (Word16, Word32) missing */
 
-#define BUFFER_SAMPLES 5760
+#define BUFFER_SAMPLES 28800 /* 15 EVS frames at 48 kHz, in bytes */
 #define BUFFER_BYTES   (MAX_BITS_PER_FRAME + 7) / 8
 #define	EVS_SAMPLES    320
+#define EVS_MAX_FRAMES 15
 
 /* Sample frame data */
 #include "asterisk/slin.h"
@@ -47,30 +48,13 @@ struct evs_coder_pvt {
 	Decoder_State *decoder;
 	short buf[BUFFER_SAMPLES];
 	float con[BUFFER_BYTES];
-	unsigned char fra[BUFFER_BYTES];
 	Indice ind_list[MAX_NUM_INDICES];
 };
 
-static Word16 unpack_bit(UWord8 **pt, UWord8 *mask);
 static Word16 rate2AMRWB_IOmode(Word32 rate);
 static Word16 rate2EVSmode(Word32 rate);
 static short select_mode(short Opt_AMR_WB, short Opt_RF_ON, long total_brate);
 static int select_bit_rate(int bit_rate, int max_bandwidth);
-
-/* Copy & Paste from lib_com/bitstream.c */
-static Word16 unpack_bit(UWord8 **pt, UWord8 *mask)
-{
-	Word16 bit = ((**pt & *mask) != 0);
-
-	*mask >>= 1;
-	if (*mask == 0)
-	{
-		*mask = 0x80;
-		(*pt)++;
-	}
-
-	return bit;
-}
 
 static Word16 rate2AMRWB_IOmode(Word32 rate)
 {
@@ -308,6 +292,11 @@ static int lintoevs_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	/* XXX We should look at how old the rest of our stream is, and if it
 	 is too old, then we should overwrite it entirely, otherwise we can
 	 get artifacts of earlier talk that do not belong */
+	if (pvt->samples > BUFFER_SAMPLES / 2 ||
+	    f->datalen > sizeof(apvt->buf) - pvt->samples * sizeof(apvt->buf[0])) {
+		ast_log(LOG_WARNING, "EVS encoder input exceeds buffer\n");
+		return -1;
+	}
 	memcpy(apvt->buf + pvt->samples, f->data.ptr, f->datalen);
 	pvt->samples += f->samples;
 
@@ -436,114 +425,108 @@ static struct ast_frame *lintoevs_frameout(struct ast_trans_pvt *pvt)
 	return result;
 }
 
+/* Header-Full ToCs precede all speech payloads. Validate the complete packet
+ * before allowing the reference decoder to inspect any of its bits. */
+static int evs_parse_packet(const unsigned char *data, size_t length,
+    unsigned int rates[EVS_MAX_FRAMES], unsigned char modes[EVS_MAX_FRAMES],
+    unsigned char qbits[EVS_MAX_FRAMES], const unsigned char **payload,
+    unsigned int *count, int *cmr)
+{
+    size_t pos = 0, bytes = 0;
+    unsigned int n = 0;
+    unsigned char toc;
+
+    if (!length) {
+        return -1;
+    }
+    *cmr = -1;
+    if (data[0] & 0x80) {
+        /* H=1 identifies the optional CMR. 0xff means NO_REQ. */
+        *cmr = data[0] & 0x7f;
+        pos++;
+    }
+    do {
+        unsigned int rate, mode;
+        if (pos >= length || n == EVS_MAX_FRAMES) {
+            return -1;
+        }
+        toc = data[pos++];
+        if (toc & 0x80) {
+            return -1;
+        }
+        mode = toc & 0x0f;
+        if (toc & 0x20) {
+            rate = AMRWB_IOmode2rate[mode];
+        } else {
+            if (toc & 0x10) { /* unused bit in primary-mode ToC */
+                return -1;
+            }
+            rate = PRIMARYmode2rate[mode];
+        }
+        if ((int)rate < 0 || rate / 50 > MAX_BITS_PER_FRAME) {
+            return -1;
+        }
+        modes[n] = toc;
+        rates[n] = rate;
+        qbits[n] = (toc & 0x20) ? !!(toc & 0x10) : 1;
+		/* AMR-WB SID appends STI and four CMI bits in the same byte stream. */
+		bytes += (rate / 50 + ((toc & 0x20) && rate == SID_1k75 ? 5 : 0) + 7) / 8;
+        n++;
+    } while (toc & 0x40);
+    if (bytes != length - pos) {
+        return -1;
+    }
+    *payload = data + pos;
+    *count = n;
+    return 0;
+}
+
 static int evstolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
-	/* ToDo: 1) Packet-Loss Concealment (PLC)
-	 *       2) several frames; currently just one frame
-	 *       3) Compact format; currently only Header-Full format */
-	struct evs_coder_pvt *apvt = pvt->pvt;
-	const short n_samples = pvt->t->dst_codec.sample_rate / 50;
+    struct evs_coder_pvt *apvt = pvt->pvt;
+    struct evs_attr *attr = ast_format_get_attribute_data(f->subclass.format);
+    const unsigned int n_samples = pvt->t->dst_codec.sample_rate / 50;
+    unsigned int rates[EVS_MAX_FRAMES], count, i;
+    unsigned char modes[EVS_MAX_FRAMES], qbits[EVS_MAX_FRAMES];
+    const unsigned char *payload;
+    int cmr;
 
-	struct evs_attr *attr = ast_format_get_attribute_data(f->subclass.format);
-	unsigned char *in = f->data.ptr;
-	unsigned char *payload = in;
-	const frameMode bad_frame = FRAMEMODE_NORMAL;
-	unsigned int toc_byte = in[0];
-	UWord16 core_mode;
-	unsigned int num_bits;
-
-	if (toc_byte & 0x80) { /* Header Type identification bit */
-		/* not Table of Content (ToC) but Change-Mode Request (CMR) */
-		if (attr && toc_byte <= 0x7f) { /* 0xff = NO_REQ */
-			attr->mode_current = toc_byte;
-		}
-		/* next byte is ToC */
-		in++; payload++;
-		toc_byte = in[0];
-	}
-
-	if (toc_byte & 0x80) { /* Header Type identification bit */
-		ast_log(LOG_ERROR, "2nd CMR; bitstream is corrupted\n");
-	}
-
-	if (toc_byte & 0x40) { /* Followed bit */
-		ast_log(LOG_ERROR, "2nd frame; bitstream is corrupted\n"); /* ToDo */
-	}
-
-	core_mode = toc_byte & 0x0f;
-	if (toc_byte & 0x20) { /* EVS mode bit */
-		apvt->decoder->Opt_AMR_WB = 1;
-		apvt->decoder->bfi = !(toc_byte & 0x10); /* Quality bit */
-		apvt->decoder->total_brate = AMRWB_IOmode2rate[core_mode];
-	} else {
-		apvt->decoder->Opt_AMR_WB = 0;
-		apvt->decoder->bfi = 0; /* Bad frame indicator; ignored for EVS */
-		apvt->decoder->total_brate = PRIMARYmode2rate[core_mode];
-	}
-	/* Next byte is Payload */
-	payload++;
-
-	num_bits = apvt->decoder->total_brate / 50;
-	if (MAX_BITS_PER_FRAME < num_bits) {
-		ast_log(LOG_ERROR, "more than %d bits; bitstream is corrupted\n",
-			MAX_BITS_PER_FRAME);
-	}
-	/* AMR payload is reordered on the wire, see lib_com/mime.h
-	 * and lib_com/bitsream.c:read_indices_mime */
-	if (apvt->decoder->Opt_AMR_WB) {
-		UWord8 mask = 0x80;
-		int i;
-
-		/* Clear all bytes of the buffer */
-		for (i = 0; i < ((num_bits + 7) / 8); i = i + 1) {
-			apvt->fra[i] = 0x00;
-		}
-		for (i = 0; i < num_bits; i = i + 1) {
-			/* unpack_bit increases the payload pointer by one after 8 bits
-			 * unpack_bit shifts the mask by one after each bit */
-			int bit_value = unpack_bit(&payload, &mask);
-			/* Returns the bit position for the current bit in
-			 * the current AMR-WB mode */
-			int position = sort_ptr[core_mode][i];
-			/* Writes (|=) at its new byte (/8) and bit (%8) position from
-			 * left to right (<<7-) */
-			apvt->fra[position / 8] |= (bit_value << (7 - (position % 8)));
-		}
-		/* Unpack auxiliary bits of Silence Insertion Description (SID) frame */
-		if (apvt->decoder->total_brate == SID_1k75)
-		{
-			Word16 sti = unpack_bit(&payload, &mask);
-			Word16 cmi = unpack_bit(&payload, &mask) << 3;
-			cmi |= unpack_bit(&payload, &mask) << 2;
-			cmi |= unpack_bit(&payload, &mask) << 1;
-			cmi |= unpack_bit(&payload, &mask) << 0;
-			if (sti == 0) { /* SID_FIRST; otherwise SID_UPDATE */
-				apvt->decoder->total_brate = 0;
-			}
-		}
-		payload = apvt->fra;
-		/* read_indices_from_djb could be avoided for AMR-WB, which would
-		 * avoid one round of bit-shuffling. However, many flags of the
-		 * decoder state are set by this function. Please, report this as
-		 * issue, if you are affected by this additional bit-shuffling. */
-	}
-	read_indices_from_djb(apvt->decoder, payload, num_bits, 0, 0);
-
-	if (apvt->decoder->Opt_AMR_WB) {
-		amr_wb_dec(apvt->decoder, apvt->con);
-	} else {
-		evs_dec(apvt->decoder, apvt->con, bad_frame);
-	}
-	syn_output(apvt->con, n_samples, pvt->outbuf.i16 + pvt->samples);
-
-	if (apvt->decoder->ini_frame < MAX_FRAME_COUNTER) {
-		apvt->decoder->ini_frame = apvt->decoder->ini_frame + 1;
-	}
-
-	pvt->samples += n_samples;
-	pvt->datalen += n_samples * 2;
-
-	return 0;
+	if (evs_parse_packet(f->data.ptr, f->datalen, rates, modes, qbits,
+	        &payload, &count, &cmr) ||
+	    pvt->samples > BUFFER_SAMPLES / 2 ||
+	    count * n_samples > (BUFFER_SAMPLES / 2) - pvt->samples) {
+        ast_log(LOG_WARNING, "Invalid or oversized EVS Header-Full packet
+");
+        return -1;
+    }
+    if (attr && cmr >= 0 && cmr != 0x7f) {
+        attr->mode_current = cmr;
+    }
+    /* The ETSI routine reorders AMR-WB IO bits when reading RTP payloads. */
+    apvt->decoder->bitstreamformat = VOIP_RTPDUMP;
+    for (i = 0; i < count; i++) {
+        unsigned int bits = rates[i] / 50;
+		unsigned int bytes = (bits + ((modes[i] & 0x20) &&
+		    rates[i] == SID_1k75 ? 5 : 0) + 7) / 8;
+        unsigned int amr = !!(modes[i] & 0x20);
+        unsigned int mode = modes[i] & 0x0f;
+        apvt->decoder->Opt_AMR_WB = amr;
+        read_indices_from_djb(apvt->decoder, (unsigned char *)payload, bits,
+            amr, mode, qbits[i], 0, 0);
+        if (amr) {
+            amr_wb_dec(apvt->decoder, apvt->con);
+        } else {
+            evs_dec(apvt->decoder, apvt->con, FRAMEMODE_NORMAL);
+        }
+        syn_output(apvt->con, n_samples, pvt->outbuf.i16 + pvt->samples);
+        if (apvt->decoder->ini_frame < MAX_FRAME_COUNTER) {
+            apvt->decoder->ini_frame++;
+        }
+        pvt->samples += n_samples;
+        pvt->datalen += n_samples * sizeof(short);
+		payload += bytes;
+    }
+    return 0;
 }
 
 static void lintoevs_destroy(struct ast_trans_pvt *pvt)
@@ -762,12 +745,16 @@ static struct ast_translator lin48toevs = {
 
 static int evs_sample_counter(struct ast_frame *frame)
 {
-	return EVS_SAMPLES; /* ToDo: several frames per RTP payload (ToC) */
-	/* is this required? would limit Asterisk to Header-Full
-	 * format, because here the result of the SDP negotiation
-	 * is unknown. In Header-Full-only mode, the payloads are
-	 * not padded to identify the Compact format, see
-	 * 3GPP TS 26.445 A.2.3.2. Mhm, has anyone an idea? */
+    unsigned int rates[EVS_MAX_FRAMES], count;
+    unsigned char modes[EVS_MAX_FRAMES], qbits[EVS_MAX_FRAMES];
+    const unsigned char *payload;
+    int cmr;
+
+    if (evs_parse_packet(frame->data.ptr, frame->datalen, rates, modes,
+            qbits, &payload, &count, &cmr)) {
+        return 0;
+    }
+    return count * EVS_SAMPLES;
 }
 
 static int unload_module(void)
@@ -804,7 +791,7 @@ static int load_module(void)
 	evs_previous_sample_counter = evs_codec->samples_count;
 	evs_codec->samples_count = evs_sample_counter;
 	evs_previous_maximum_ms = evs_codec->maximum_ms;
-	evs_codec->maximum_ms = 20; /* ToDo: several frames per RTP payload */
+	evs_codec->maximum_ms = 300; /* 15 Header-Full frames */
 	/* A smoothable codec allows Asterisk to put several frame blocks
 	 * into one RTP packet, for example when the negotiated paketization
 	 * time (ptime) is 60ms. Frames of codecs like 3GPP EVS cannot be put

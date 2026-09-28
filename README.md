@@ -83,3 +83,19 @@ The transcoding module works for me and contains everything I need. If you canno
 ## Thanks go to
 
 everyone who made the 3GPP EVS Reference Implementation possible.
+
+### Newer ETSI EVS source (TS 26.443 v19.0.0)
+
+`codecs/codec_evs.c` uses the eight-argument `read_indices_from_djb()`
+API. Its Header-Full decoder validates the complete packet before calling the
+reference decoder, accepts up to 15 ToCs and their speech frames, and lets the
+reference decoder reorder AMR-WB bits and handle SID/DTX. SDP advertises
+`hf-only=1` because Compact-format RTP payloads are not decoded. The Asterisk
+sample counter reports 320 RTP clock samples per 20 ms ToC, up to 300 ms.
+
+Packet-loss concealment still requires an Asterisk media-path integration that
+supplies a missing-frame event to this translator. A missing RTP packet does not
+call `evstolin_framein()` by itself. Channel-aware redundant-frame recovery is
+also not implemented by this wrapper. Validate audio, DTX and loss behavior
+against your Asterisk 22 deployment before enabling transcoding on production
+calls.
